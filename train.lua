@@ -1,6 +1,6 @@
 require 'xlua'
 require 'optim'
-require 'cunn'
+require 'nn'
 dofile './provider.lua'
 local c = require 'trepl.colorize'
 
@@ -18,6 +18,7 @@ opt = lapp[[
 ]]
 
 print(opt)
+torch.setdefaulttensortype('torch.FloatTensor')
 
 do -- data augmentation module
   local BatchFlip,parent = torch.class('nn.BatchFlip', 'nn.Module')
@@ -43,8 +44,7 @@ end
 print(c.blue '==>' ..' configuring model')
 local model = nn.Sequential()
 model:add(nn.BatchFlip():float())
-model:add(nn.Copy('torch.FloatTensor','torch.CudaTensor'):cuda())
-model:add(dofile('models/'..opt.model..'.lua'):cuda())
+model:add(dofile('models/'..opt.model..'.lua'))
 model:get(2).updateGradInput = function(input) return end
 
 if opt.backend == 'cudnn' then
@@ -71,7 +71,7 @@ parameters,gradParameters = model:getParameters()
 
 
 print(c.blue'==>' ..' setting criterion')
-criterion = nn.CrossEntropyCriterion():cuda()
+criterion = nn.CrossEntropyCriterion()
 
 
 print(c.blue'==>' ..' configuring optimizer')
@@ -92,7 +92,7 @@ function train()
   
   print(c.blue '==>'.." online epoch # " .. epoch .. ' [batchSize = ' .. opt.batchSize .. ']')
 
-  local targets = torch.CudaTensor(opt.batchSize)
+  local targets = torch.FloatTensor(opt.batchSize)
   local indices = torch.randperm(provider.trainData.data:size(1)):long():split(opt.batchSize)
   -- remove last element so that all the batches have equal size
   indices[#indices] = nil
@@ -107,7 +107,7 @@ function train()
     local feval = function(x)
       if x ~= parameters then parameters:copy(x) end
       gradParameters:zero()
-      
+     
       local outputs = model:forward(inputs)
       local f = criterion:forward(outputs, targets)
       local df_do = criterion:backward(outputs, targets)
@@ -118,6 +118,7 @@ function train()
       return f,gradParameters
     end
     optim.sgd(feval, parameters, optimState)
+    collectgarbage()
   end
 
   confusion:updateValids()
@@ -139,6 +140,7 @@ function test()
   for i=1,provider.testData.data:size(1),bs do
     local outputs = model:forward(provider.testData.data:narrow(1,i,bs))
     confusion:batchAdd(outputs, provider.testData.labels:narrow(1,i,bs))
+    collectgarbage()
   end
 
   confusion:updateValids()
